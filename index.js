@@ -1,133 +1,100 @@
-const Discord = require("discord.js");
-const { prefix, token } = require("./config.json");
-const ytdl = require("ytdl-core");
+const fs = require('fs');
+const Discord = require('discord.js');
+const FreakyBotClient = require('./client/freakybotclient');
+const config = require('./config.json');
+const {Player} = require('discord-player');
 
-const freakybotclient = new Discord.Client();
+const client = new FreakyBotClient();
+client.commands = new Discord.Collection();
 
-const queue = new Map();
+const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
 
-freakybotclient.once("ready", () => {
-  console.log("Ready!");
+for (const file of commandFiles) {
+  const command = require(`./commands/${file}`);
+  client.commands.set(command.name, command);
+}
+
+console.log(client.commands);
+
+const player = new Player(client);
+
+player.on('error', (queue, error) => {
+  console.log(`[${queue.guild.name}] Error emitted from the queue: ${error.message}`);
 });
 
-freakybotclient.once("reconnecting", () => {
-  console.log("Reconnecting!");
+player.on('connectionError', (queue, error) => {
+  console.log(`[${queue.guild.name}] Error emitted from the connection: ${error.message}`);
 });
 
-freakybotclient.once("disconnect", () => {
-  console.log("Disconnect!");
+player.on('trackStart', (queue, track) => {
+  queue.metadata.send(`▶ | Started playing: **${track.title}** in **${queue.connection.channel.name}**!`);
 });
 
-freakybotclient.on("message", async message => {
-  if (message.author.bot) return;
-  if (!message.content.startsWith(prefix)) return;
+player.on('trackAdd', (queue, track) => {
+  queue.metadata.send(`🎶 | Track **${track.title}** queued!`);
+});
 
-  const serverQueue = queue.get(message.guild.id);
+player.on('botDisconnect', queue => {
+  queue.metadata.send('❌ | I was manually disconnected from the voice channel, clearing queue!');
+});
 
-  if (message.content.startsWith(`${prefix}play`)) {
-    execute(message, serverQueue);
-    return;
-  } else if (message.content.startsWith(`${prefix}skip`)) {
-    skip(message, serverQueue);
-    return;
-  } else if (message.content.startsWith(`${prefix}stop`)) {
-    stop(message, serverQueue);
-    return;
-  } else {
-    message.channel.send("You need to enter a valid command!");
+player.on('channelEmpty', queue => {
+  queue.metadata.send('❌ | Nobody is in the voice channel, leaving...');
+});
+
+player.on('queueEnd', queue => {
+  queue.metadata.send('✅ | Queue finished!');
+});
+
+client.once('ready', async () => {
+  console.log('Ready!');
+});
+
+client.on('ready', function() {
+  client.user.setActivity(config.activity, { type: config.activityType });
+});
+
+client.once('reconnecting', () => {
+  console.log('Reconnecting!');
+});
+
+client.once('disconnect', () => {
+  console.log('Disconnect!');
+});
+
+client.on('messageCreate', async message => {
+
+  if (message.author.bot || !message.guild) return;
+  if (!client.application?.owner) await client.application?.fetch();
+
+  if (message.content === '!deploy' && message.author.id === client.application?.owner?.id) {
+    await message.guild.commands
+      .set(client.commands)
+      .then(() => {
+        message.reply('Deployed!');
+      })
+      .catch(err => {
+        message.reply('Could not deploy commands! Make sure the bot has the application.commands permission!');
+        console.error(err);
+      });
   }
 });
 
-async function execute(message, serverQueue) {
-  const args = message.content.split(" ");
+client.on('interactionCreate', async interaction => {
+  const command = client.commands.get(interaction.commandName.toLowerCase());
 
-  const voiceChannel = message.member.voice.channel;
-  if (!voiceChannel)
-    return message.channel.send(
-      "You need to be in a voice channel to play music!"
-    );
-  const permissions = voiceChannel.permissionsFor(message.freakybotclient.user);
-  if (!permissions.has("CONNECT") || !permissions.has("SPEAK")) {
-    return message.channel.send(
-      "I need the permissions to join and speak in your voice channel!"
-    );
-  }
-
-  const songInfo = await ytdl.getInfo(args[1]);
-  const song = {
-        title: songInfo.videoDetails.title,
-        url: songInfo.videoDetails.video_url,
-   };
-
-  if (!serverQueue) {
-    const queueContruct = {
-      textChannel: message.channel,
-      voiceChannel: voiceChannel,
-      connection: null,
-      songs: [],
-      volume: 5,
-      playing: true
-    };
-
-    queue.set(message.guild.id, queueContruct);
-
-    queueContruct.songs.push(song);
-
-    try {
-      var connection = await voiceChannel.join();
-      queueContruct.connection = connection;
-      play(message.guild, queueContruct.songs[0]);
-    } catch (err) {
-      console.log(err);
-      queue.delete(message.guild.id);
-      return message.channel.send(err);
+  try {
+    if (interaction.commandName == 'mute' || interaction.commandName == 'userinfo') {
+      command.execute(interaction, client);
+    } else {
+      command.execute(interaction, player);
     }
-  } else {
-    serverQueue.songs.push(song);
-    return message.channel.send(`${song.title} has been added to the queue!`);
+  } catch (error) {
+    console.error(error);
+    interaction.followUp({
+      content: 'There was an error trying to execute that command!',
+    });
   }
-}
+});
 
-function skip(message, serverQueue) {
-  if (!message.member.voice.channel)
-    return message.channel.send(
-      "You have to be in a voice channel to stop the music!"
-    );
-  if (!serverQueue)
-    return message.channel.send("There is no song that I could skip!");
-  serverQueue.connection.dispatcher.end();
-}
-
-function stop(message, serverQueue) {
-  if (!message.member.voice.channel)
-    return message.channel.send(
-      "You have to be in a voice channel to stop the music!"
-    );
-    
-  if (!serverQueue)
-    return message.channel.send("There is no song that I could stop!");
-    
-  serverQueue.songs = [];
-  serverQueue.connection.dispatcher.end();
-}
-
-function play(guild, song) {
-  const serverQueue = queue.get(guild.id);
-  if (!song) {
-    serverQueue.voiceChannel.leave();
-    queue.delete(guild.id);
-    return;
-  }
-
-  const dispatcher = serverQueue.connection
-    .play(ytdl(song.url))
-    .on("finish", () => {
-      serverQueue.songs.shift();
-      play(guild, serverQueue.songs[0]);
-    })
-    .on("error", error => console.error(error));
-  dispatcher.setVolumeLogarithmic(serverQueue.volume / 5);
-  serverQueue.textChannel.send(`Start playing: **${song.title}**`);
-}
-
-freakybotclient.login(token);
+client.login(config.token);
