@@ -1,0 +1,26 @@
+{
+    "name": "FreakyBot",
+    "version": "1.0.001",
+    "description": "Music bot for discord",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "discord.js": "^11.2.1",
+        "express": "^4.16.2",
+        "ytdl-core": "^4.10.1"
+    },
+    "engines": {
+        "node": "8.x"
+    },
+    "repository": {
+        "url": "https://github.com/freakyfanny/freakybot"
+    },
+    "license": "MIT",
+    "keywords": [
+        "node",
+        "glitch",
+        "express"
+    ]
+}
